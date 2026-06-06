@@ -109,6 +109,43 @@ static juce::String glideModeTextFunction (const gin::Parameter&, float v)
     }
 }
 
+namespace
+{
+    static constexpr int kNumModSrcs = WavetableAudioProcessor::ModDepthParams::numSrcs;
+    static constexpr int kNumModDsts = WavetableAudioProcessor::ModDepthParams::numDsts;
+
+    static const char* kModSrcIds[kNumModSrcs] = {
+        "feg", "env1", "env2", "env3", "lfo1", "lfo2", "lfo3", "vel", "note",
+        "step", "cc1", "mpe_pressure", "mpe_timbre", "mpe_pb", "pb"
+    };
+
+    static const char* kModSrcNames[kNumModSrcs] = {
+        "Filter EG", "Env 1", "Env 2", "Env 3", "LFO 1", "LFO 2", "LFO 3",
+        "Velocity", "Note", "Step LFO", "CC1 Mod Wheel",
+        "MPE Pressure", "MPE Timbre", "MPE Pitch Bend", "Pitch Bend"
+    };
+
+    static const char* kModDstIds[kNumModDsts] = {
+        "osc1pos", "osc1tune", "osc1fine", "osc1level", "osc1pan",
+        "osc1detune", "osc1spread", "osc1formant", "osc1bend",
+        "osc2pos", "osc2tune", "osc2fine", "osc2level", "osc2pan",
+        "osc2detune", "osc2spread", "osc2formant", "osc2bend",
+        "subtune", "sublevel", "subpan",
+        "noiselevel", "noisepan",
+        "fltfreq", "fltres", "fltamount", "masterlevel"
+    };
+
+    static const char* kModDstNames[kNumModDsts] = {
+        "OSC1 Pos", "OSC1 Tune", "OSC1 Fine", "OSC1 Level", "OSC1 Pan",
+        "OSC1 Detune", "OSC1 Spread", "OSC1 Formant", "OSC1 Bend",
+        "OSC2 Pos", "OSC2 Tune", "OSC2 Fine", "OSC2 Level", "OSC2 Pan",
+        "OSC2 Detune", "OSC2 Spread", "OSC2 Formant", "OSC2 Bend",
+        "Sub Tune", "Sub Level", "Sub Pan",
+        "Noise Level", "Noise Pan",
+        "Flt Freq", "Flt Res", "Flt Amount", "Master Level"
+    };
+}
+
 //==============================================================================
 void WavetableAudioProcessor::OSCParams::setup (WavetableAudioProcessor& p, int idx)
 {
@@ -305,6 +342,36 @@ void WavetableAudioProcessor::GlobalParams::setup (WavetableAudioProcessor& p)
 }
 
 //==============================================================================
+void WavetableAudioProcessor::ModDepthParams::setup (WavetableAudioProcessor& p)
+{
+    for (int s = 0; s < kNumModSrcs; ++s)
+    {
+        for (int d = 0; d < kNumModDsts; ++d)
+        {
+            auto id   = juce::String ("mod_") + kModSrcIds[s] + "_" + kModDstIds[d];
+            auto name = juce::String ("Mod ") + kModSrcNames[s] + " " + kModDstNames[d];
+            auto abbr = juce::String (kModSrcIds[s]) + "->" + kModDstIds[d];
+
+            depths[s][d] = p.addExtParam (id, name, abbr, "",
+                                          { -1.0f, 1.0f, 0.0f, 1.0f },
+                                          0.0f, 0.0f);
+        }
+    }
+}
+
+//==============================================================================
+void WavetableAudioProcessor::WtIndexParams::setup (WavetableAudioProcessor& p)
+{
+    auto numTables = juce::jmax (1, p.getWavetableNames().size());
+    auto maxIdx = float (numTables - 1);
+
+    osc1Index = p.addIntParam ("osc1_wt_index", "OSC1 Wavetable Index", "WT1 Idx", "",
+                               { 0.0f, maxIdx, 1.0f, 1.0f }, 0.0f, 0.0f);
+    osc2Index = p.addIntParam ("osc2_wt_index", "OSC2 Wavetable Index", "WT2 Idx", "",
+                               { 0.0f, maxIdx, 1.0f, 1.0f }, 0.0f, 0.0f);
+}
+
+//==============================================================================
 void WavetableAudioProcessor::UIParams::setup (WavetableAudioProcessor& p)
 {
     activeLFO   = p.addIntParam ("uiLFO",   "LFO", "", "",   { 0.0, 2.0, 0.0, 1.0 }, 0.0, 0.0f);
@@ -478,7 +545,7 @@ void extractWavetables()
         juce::MemoryBlock mb2;
 
         mb1.fromBase64Encoding (state.getProperty ("wt1Data").toString());
-        mb2.fromBase64Encoding (state.getProperty ("wt1Data").toString());
+        mb2.fromBase64Encoding (state.getProperty ("wt2Data").toString());
 
         auto changed = false;
         if (mb1.getSize() > 0)
@@ -605,6 +672,9 @@ WavetableAudioProcessor::WavetableAudioProcessor()
     adsrParams.setup (*this);
 
     globalParams.setup (*this);
+    modDepthParams.setup (*this);
+    wtIndexParams.setup (*this);
+    syncWavetableIndexParamsToCurrentTables();
     uiParams.setup (*this);
     gateParams.setup (*this);
     chorusParams.setup (*this);
@@ -712,8 +782,78 @@ void WavetableAudioProcessor::incWavetable (int osc, int delta)
     if (idx >= tables.size()) idx = 0;
 
     table = tables[idx];
+    lastWtIndex[osc] = idx;
+    auto indexParam = osc == 0 ? wtIndexParams.osc1Index : wtIndexParams.osc2Index;
+    if (indexParam != nullptr)
+        indexParam->setUserValue (float (idx));
 
     reloadWavetables();
+}
+
+void WavetableAudioProcessor::setWavetableByIndex (int osc, int index)
+{
+    auto tables = getWavetableNames();
+    if (tables.isEmpty())
+        return;
+
+    index = juce::jlimit (0, tables.size() - 1, index);
+
+    auto& table = osc == 0 ? osc1Table : osc2Table;
+    auto& userTable = osc == 0 ? userTable1 : userTable2;
+    auto& size = osc == 0 ? osc1Size : osc2Size;
+
+    if (table.toString() == tables[index] && userTable.getSize() == 0)
+    {
+        lastWtIndex[osc] = index;
+        return;
+    }
+
+    userTable.reset();
+    size = -1;
+    table = tables[index];
+    lastWtIndex[osc] = index;
+
+    reloadWavetables();
+}
+
+void WavetableAudioProcessor::syncWavetableIndexParamsToCurrentTables()
+{
+    auto tables = getWavetableNames();
+    if (tables.isEmpty())
+        return;
+
+    auto syncOne = [&] (int osc, gin::Parameter::Ptr param)
+    {
+        if (param == nullptr)
+            return;
+
+        auto& table = osc == 0 ? osc1Table : osc2Table;
+        auto index = tables.indexOf (table.toString());
+        if (index < 0)
+            index = 0;
+
+        lastWtIndex[osc] = index;
+        param->setUserValue (float (index));
+    };
+
+    syncOne (0, wtIndexParams.osc1Index);
+    syncOne (1, wtIndexParams.osc2Index);
+}
+
+void WavetableAudioProcessor::updateWavetableIndexParams()
+{
+    auto updateOne = [&] (int osc, gin::Parameter::Ptr param)
+    {
+        if (param == nullptr)
+            return;
+
+        auto index = param->getUserValueInt();
+        if (index != lastWtIndex[osc])
+            setWavetableByIndex (osc, index);
+    };
+
+    updateOne (0, wtIndexParams.osc1Index);
+    updateOne (1, wtIndexParams.osc2Index);
 }
 
 bool WavetableAudioProcessor::loadUserWavetable (int osc, const juce::File& f, int sz)
@@ -731,6 +871,8 @@ bool WavetableAudioProcessor::loadUserWavetable (int osc, const juce::File& f, i
         mb = raw;
         name = f.getFileNameWithoutExtension();
         size = sz;
+        auto indexParam = osc == 0 ? wtIndexParams.osc1Index : wtIndexParams.osc2Index;
+        lastWtIndex[osc] = indexParam != nullptr ? indexParam->getUserValueInt() : -1;
         return true;
     }
     return false;
@@ -754,6 +896,7 @@ void WavetableAudioProcessor::stateUpdated()
     userTable2.fromBase64Encoding (state.getProperty ("wt2Data").toString());
 
     reloadWavetables();
+    syncWavetableIndexParamsToCurrentTables();
     presetLoaded = true;
     lastMono = globalParams.mono->isOn();
 }
@@ -972,6 +1115,7 @@ void WavetableAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     startBlock();
     setMPE (globalParams.mpe->isOn());
     setPitchBendRange (globalParams.pitchBend->getUserValueInt());
+    updateWavetableIndexParams();
 
     playhead = getPlayHead();
 

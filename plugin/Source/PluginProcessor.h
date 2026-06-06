@@ -54,6 +54,7 @@ public:
 
     void reloadWavetables();
     void incWavetable (int osc, int delta);
+    void setWavetableByIndex (int osc, int index);
     bool loadUserWavetable (int osc, const juce::File& f, int sz);
     juce::StringArray getWavetableNames() const;
     juce::Array<juce::File> getWavetableFiles() const;
@@ -165,6 +166,32 @@ public:
         void setup (WavetableAudioProcessor& p);
 
         JUCE_DECLARE_NON_COPYABLE (GlobalParams)
+    };
+
+    // Explicit host-visible modulation depths.
+    struct ModDepthParams
+    {
+        ModDepthParams() = default;
+
+        static constexpr int numSrcs = 15;
+        static constexpr int numDsts = 27;
+
+        gin::Parameter::Ptr depths[numSrcs][numDsts] = {};
+
+        void setup (WavetableAudioProcessor& p);
+
+        JUCE_DECLARE_NON_COPYABLE (ModDepthParams)
+    };
+
+    struct WtIndexParams
+    {
+        WtIndexParams() = default;
+
+        gin::Parameter::Ptr osc1Index, osc2Index;
+
+        void setup (WavetableAudioProcessor& p);
+
+        JUCE_DECLARE_NON_COPYABLE (WtIndexParams)
     };
 
     // UI Params
@@ -300,6 +327,8 @@ public:
     ADSRParams adsrParams;
 
     GlobalParams globalParams;
+    ModDepthParams modDepthParams;
+    WtIndexParams wtIndexParams;
     GateParams gateParams;
     ChorusParams chorusParams;
     DistortionParams distortionParams;
@@ -330,6 +359,7 @@ public:
     juce::Value osc1Table, osc2Table;
     juce::MemoryBlock userTable1, userTable2;
     int osc1Size = -1, osc2Size = -1;
+    int lastWtIndex[Cfg::numOSCs] = { -1, -1 };
 
     //==============================================================================
     gin::ModMatrix modMatrix;
@@ -358,6 +388,8 @@ public:
 private:
     bool isParamLocked (gin::Parameter* p) override;
     float getSmoothingTime (gin::Parameter*);
+    void syncWavetableIndexParamsToCurrentTables();
+    void updateWavetableIndexParams();
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WavetableAudioProcessor)

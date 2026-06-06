@@ -242,6 +242,40 @@ void WavetableVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, in
 void WavetableVoice::updateParams (int blockSize)
 {
     auto note = getCurrentlyPlayingNote();
+
+    auto modSourceOut = [&] (int srcIdx) -> float
+    {
+        switch (srcIdx)
+        {
+            case 0:  return filterADSR.getOutput();
+            case 1:  return proc.envParams[0].enable->isOn() ? modADSRs[0].getOutput() : 0.0f;
+            case 2:  return proc.envParams[1].enable->isOn() ? modADSRs[1].getOutput() : 0.0f;
+            case 3:  return proc.envParams[2].enable->isOn() ? modADSRs[2].getOutput() : 0.0f;
+            case 4:  return proc.lfoParams[0].enable->isOn() ? modLFOs[0].getOutput() : 0.0f;
+            case 5:  return proc.lfoParams[1].enable->isOn() ? modLFOs[1].getOutput() : 0.0f;
+            case 6:  return proc.lfoParams[2].enable->isOn() ? modLFOs[2].getOutput() : 0.0f;
+            case 7:  return currentlyPlayingNote.noteOnVelocity.asUnsignedFloat();
+            case 8:  return currentlyPlayingNote.initialNote / 127.0f;
+            case 9:  return proc.stepLfoParams.enable->isOn() ? modStepLFO.getOutput() : 0.0f;
+            case 10: return proc.modSrcCC.size() > 1 ? proc.modMatrix.getMonoValue (proc.modSrcCC[1]) : 0.0f;
+            case 11: return currentlyPlayingNote.pressure.asUnsignedFloat();
+            case 12: return currentlyPlayingNote.timbre.asUnsignedFloat();
+            case 13: return currentlyPlayingNote.pitchbend.asUnsignedFloat();
+            case 14: return proc.modMatrix.getMonoValue (proc.modScrPitchBend);
+            default: return 0.0f;
+        }
+    };
+
+    auto modSum = [&] (int dstIdx) -> float
+    {
+        float total = 0.0f;
+        for (int s = 0; s < WavetableAudioProcessor::ModDepthParams::numSrcs; ++s)
+        {
+            if (auto* depth = proc.modDepthParams.depths[s][dstIdx])
+                total += modSourceOut (s) * depth->getUserValue();
+        }
+        return juce::jlimit (-1.0f, 1.0f, total);
+    };
     
     proc.modMatrix.setPolyValue (*this, proc.modSrcNote, note.initialNote / 127.0f);
     
@@ -259,14 +293,19 @@ void WavetableVoice::updateParams (int blockSize)
         currentMidiNotes[i] += float (note.totalPitchbendInSemitones);
         currentMidiNotes[i] += getValue (proc.oscParams[i].tune) + getValue (proc.oscParams[i].finetune) / 100.0f;
 
+        auto dst = i == 0 ? 0 : 9;
+        currentMidiNotes[i] += modSum (dst + 1) * 36.0f;
+        currentMidiNotes[i] += modSum (dst + 2);
+
         oscParams[i].voices     = int (proc.oscParams[i].voices->getProcValue());
-        oscParams[i].position   = getValue (proc.oscParams[i].pos) / 100.0f;
-        oscParams[i].pan        = getValue (proc.oscParams[i].pan);
-        oscParams[i].spread     = getValue (proc.oscParams[i].spread) / 100.0f;
-        oscParams[i].detune     = getValue (proc.oscParams[i].detune);
-        oscParams[i].gain       = getValue (proc.oscParams[i].level);
-        oscParams[i].formant    = getValue (proc.oscParams[i].formant);
-        oscParams[i].bend       = getValue (proc.oscParams[i].bend);
+        oscParams[i].position   = juce::jlimit (0.0f, 1.0f, (getValue (proc.oscParams[i].pos) + modSum (dst) * 100.0f) / 100.0f);
+        oscParams[i].pan        = juce::jlimit (-1.0f, 1.0f, getValue (proc.oscParams[i].pan) + modSum (dst + 4));
+        oscParams[i].spread     = juce::jlimit (-1.0f, 1.0f, getValue (proc.oscParams[i].spread) / 100.0f + modSum (dst + 6));
+        oscParams[i].detune     = juce::jlimit (0.0f, 0.5f, getValue (proc.oscParams[i].detune) + modSum (dst + 5) * 0.5f);
+        auto levelDb = juce::Decibels::gainToDecibels (getValue (proc.oscParams[i].level), -100.0f);
+        oscParams[i].gain       = juce::Decibels::decibelsToGain (juce::jlimit (-100.0f, 0.0f, levelDb + modSum (dst + 3) * 100.0f));
+        oscParams[i].formant    = juce::jlimit (-1.0f, 1.0f, getValue (proc.oscParams[i].formant) + modSum (dst + 7));
+        oscParams[i].bend       = juce::jlimit (-1.0f, 1.0f, getValue (proc.oscParams[i].bend) + modSum (dst + 8));
     }
 
     if (proc.subParams.enable->isOn())
@@ -276,6 +315,7 @@ void WavetableVoice::updateParams (int blockSize)
         subNote += float (retuneSemitones);
         subNote += float (note.totalPitchbendInSemitones);
         subNote += getValue (proc.subParams.tune);
+        subNote += modSum (18) * 36.0f;
 
         switch (proc.subParams.wave->getUserValueInt())
         {
@@ -302,16 +342,20 @@ void WavetableVoice::updateParams (int blockSize)
                 break;
         }
 
-        subParams.leftGain  = getValue (proc.subParams.level) * (1.0f - getValue (proc.subParams.pan));
-        subParams.rightGain = getValue (proc.subParams.level) * (1.0f + getValue (proc.subParams.pan));
+        auto subLevel = getValue (proc.subParams.level) * juce::jlimit (0.0f, 2.0f, 1.0f + modSum (19));
+        auto subPan = juce::jlimit (-1.0f, 1.0f, getValue (proc.subParams.pan) + modSum (20));
+        subParams.leftGain  = subLevel * (1.0f - subPan);
+        subParams.rightGain = subLevel * (1.0f + subPan);
     }
 
     if (proc.noiseParams.enable->isOn())
     {
         noiseParams.wave = proc.noiseParams.type->getUserValueInt() == 0 ? gin::Wave::whiteNoise : gin::Wave::pinkNoise;
 
-        noiseParams.leftGain  = getValue (proc.noiseParams.level) * (1.0f - getValue (proc.noiseParams.pan));
-        noiseParams.rightGain = getValue (proc.noiseParams.level) * (1.0f + getValue (proc.noiseParams.pan));
+        auto noiseLevel = getValue (proc.noiseParams.level) * juce::jlimit (0.0f, 2.0f, 1.0f + modSum (21));
+        auto noisePan = juce::jlimit (-1.0f, 1.0f, getValue (proc.noiseParams.pan) + modSum (22));
+        noiseParams.leftGain  = noiseLevel * (1.0f - noisePan);
+        noiseParams.rightGain = noiseLevel * (1.0f + noisePan);
     }
     
     ampKeyTrack = getValue (proc.adsrParams.velocityTracking);
@@ -336,13 +380,16 @@ void WavetableVoice::updateParams (int blockSize)
 
         float n = getValue (proc.filterParams.frequency);
         n += (currentlyPlayingNote.initialNote - 60) * getValue (proc.filterParams.keyTracking);
-        n += filterEnv * filterSens * getValue (proc.filterParams.amount) * filterWidth;
+        auto filterAmount = juce::jlimit (-1.0f, 1.0f, getValue (proc.filterParams.amount) + modSum (25));
+        n += filterEnv * filterSens * filterAmount * filterWidth;
+        n += modSum (23) * filterWidth;
 
         float f = gin::getMidiNoteInHertz (n);
         float maxFreq = std::min (20000.0f, float (getSampleRate() / 2));
         f = juce::jlimit (4.0f, maxFreq, f);
 
-        float q = gin::Q / (1.0f - (getValue (proc.filterParams.resonance) / 100.0f) * 0.99f);
+        auto resonance = juce::jlimit (0.0f, 100.0f, getValue (proc.filterParams.resonance) + modSum (24) * 100.0f);
+        float q = gin::Q / (1.0f - (resonance / 100.0f) * 0.99f);
 
         switch (int (proc.filterParams.type->getProcValue()))
         {
