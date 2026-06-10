@@ -225,6 +225,8 @@ void WavetableVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, in
     
     // Run ADSR
     adsr.processMultiplying (postFilter);
+
+    postFilter.applyGain (masterLevelModGain);
     
     if (adsr.getState() == gin::AnalogADSR::State::idle)
     {
@@ -366,23 +368,36 @@ void WavetableVoice::updateParams (int blockSize)
     }
     else
     {
-        filterADSR.setAttack (getValue (proc.filterParams.attack));
-        filterADSR.setSustainLevel (getValue (proc.filterParams.sustain));
-        filterADSR.setDecay (getValue (proc.filterParams.decay));
-        filterADSR.setRelease (getValue (proc.filterParams.release));
+        filterADSR.setAttack (juce::jlimit (0.0f, 60.0f,
+            getValue (proc.filterParams.attack) + modSum (28) * 60.0f));
+        filterADSR.setDecay (juce::jlimit (0.0f, 60.0f,
+            getValue (proc.filterParams.decay) + modSum (29) * 60.0f));
+        filterADSR.setSustainLevel (juce::jlimit (0.0f, 1.0f,
+            (proc.filterParams.sustain->getUserValue() + modSum (30) * 100.0f) / 100.0f));
+        filterADSR.setRelease (juce::jlimit (0.0f, 60.0f,
+            getValue (proc.filterParams.release) + modSum (31) * 60.0f));
 
         filterADSR.process (blockSize);
 
         float filterWidth = float (gin::getMidiNoteFromHertz (20000.0));
-        float filterEnv   = filterADSR.getOutput();
-        float filterSens = getValue (proc.filterParams.velocityTracking);
-        filterSens = currentlyPlayingNote.noteOnVelocity.asUnsignedFloat() * filterSens + 1.0f - filterSens;
+        float filterEnv = filterADSR.getOutput();
 
         float n = getValue (proc.filterParams.frequency);
-        n += (currentlyPlayingNote.initialNote - 60) * getValue (proc.filterParams.keyTracking);
-        auto filterAmount = juce::jlimit (-1.0f, 1.0f, getValue (proc.filterParams.amount) + modSum (25));
-        n += filterEnv * filterSens * filterAmount * filterWidth;
         n += modSum (23) * filterWidth;
+
+        float keyTrack = juce::jlimit (0.0f, 100.0f,
+            proc.filterParams.keyTracking->getUserValue() + modSum (26) * 100.0f);
+        n += (currentlyPlayingNote.initialNote - 60) * (keyTrack / 100.0f);
+
+        auto filterAmount = juce::jlimit (-1.0f, 1.0f,
+            getValue (proc.filterParams.amount) + modSum (25));
+
+        float fltVel = juce::jlimit (0.0f, 100.0f,
+            proc.filterParams.velocityTracking->getUserValue() + modSum (27) * 100.0f);
+        float filterSens = currentlyPlayingNote.noteOnVelocity.asUnsignedFloat() * (fltVel / 100.0f)
+                         + 1.0f - (fltVel / 100.0f);
+
+        n += filterEnv * filterSens * filterAmount * filterWidth;
 
         float f = gin::getMidiNoteInHertz (n);
         float maxFreq = std::min (20000.0f, float (getSampleRate() / 2));
@@ -464,10 +479,12 @@ void WavetableVoice::updateParams (int blockSize)
                 freq = getValue (proc.lfoParams[i].rate);
 
             params.waveShape = (gin::LFO::WaveShape) int (proc.lfoParams[i].wave->getProcValue());
-            params.frequency = freq;
-            params.phase     = getValue (proc.lfoParams[i].phase);
-            params.offset    = getValue (proc.lfoParams[i].offset);
-            params.depth     = getValue (proc.lfoParams[i].depth);
+
+            auto lfoBase = 32 + i * 4;
+            params.frequency = juce::jlimit (0.0f, 50.0f, freq + modSum (lfoBase) * 50.0f);
+            params.depth     = juce::jlimit (-1.0f, 1.0f, getValue (proc.lfoParams[i].depth) + modSum (lfoBase + 1));
+            params.phase     = juce::jlimit (-1.0f, 1.0f, getValue (proc.lfoParams[i].phase) + modSum (lfoBase + 2));
+            params.offset    = juce::jlimit (-1.0f, 1.0f, getValue (proc.lfoParams[i].offset) + modSum (lfoBase + 3));
             params.delay     = getValue (proc.lfoParams[i].delay);
             params.fade      = getValue (proc.lfoParams[i].fade);
 
@@ -503,10 +520,16 @@ void WavetableVoice::updateParams (int blockSize)
         proc.modMatrix.setPolyValue (*this, proc.modSrcStep, 0);
     }
 
-    adsr.setAttack (getValue (proc.adsrParams.attack));
-    adsr.setDecay (getValue (proc.adsrParams.decay));
-    adsr.setSustainLevel (getValue (proc.adsrParams.sustain));
-    adsr.setRelease (fastKill ? 0.01f : getValue (proc.adsrParams.release));
+    adsr.setAttack (juce::jlimit (0.0f, 60.0f,
+        getValue (proc.adsrParams.attack) + modSum (44) * 60.0f));
+    adsr.setDecay (juce::jlimit (0.0f, 60.0f,
+        getValue (proc.adsrParams.decay) + modSum (45) * 60.0f));
+    adsr.setSustainLevel (juce::jlimit (0.0f, 1.0f,
+        (proc.adsrParams.sustain->getUserValue() + modSum (46) * 100.0f) / 100.0f));
+    adsr.setRelease (fastKill ? 0.01f :
+        juce::jlimit (0.0f, 60.0f, getValue (proc.adsrParams.release) + modSum (47) * 60.0f));
+
+    masterLevelModGain = juce::Decibels::decibelsToGain (juce::jlimit (-100.0f, 0.0f, modSum (48) * 100.0f));
     
     noteSmoother.process (blockSize);
 }

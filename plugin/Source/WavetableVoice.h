@@ -61,5 +61,6 @@ public:
     
     gin::EasedValueSmoother<float> noteSmoother;
     
-    float ampKeyTrack = 1.0f;    
+    float ampKeyTrack = 1.0f;
+    float masterLevelModGain = 1.0f;
 };

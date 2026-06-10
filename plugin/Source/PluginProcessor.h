@@ -174,7 +174,7 @@ public:
         ModDepthParams() = default;
 
         static constexpr int numSrcs = 15;
-        static constexpr int numDsts = 27;
+        static constexpr int numDsts = 49;
 
         gin::Parameter::Ptr depths[numSrcs][numDsts] = {};
 

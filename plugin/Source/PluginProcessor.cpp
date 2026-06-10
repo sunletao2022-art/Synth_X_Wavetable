@@ -132,7 +132,13 @@ namespace
         "osc2detune", "osc2spread", "osc2formant", "osc2bend",
         "subtune", "sublevel", "subpan",
         "noiselevel", "noisepan",
-        "fltfreq", "fltres", "fltamount", "masterlevel"
+        "fltfreq", "fltres", "fltamount", "fltkey", "fltvel",
+        "fltattack", "fltdecay", "fltsustain", "fltrelease",
+        "lfo1rate", "lfo1depth", "lfo1phase", "lfo1offset",
+        "lfo2rate", "lfo2depth", "lfo2phase", "lfo2offset",
+        "lfo3rate", "lfo3depth", "lfo3phase", "lfo3offset",
+        "ampattack", "ampdecay", "ampsustain", "amprelease",
+        "masterlevel"
     };
 
     static const char* kModDstNames[kNumModDsts] = {
@@ -142,7 +148,13 @@ namespace
         "OSC2 Detune", "OSC2 Spread", "OSC2 Formant", "OSC2 Bend",
         "Sub Tune", "Sub Level", "Sub Pan",
         "Noise Level", "Noise Pan",
-        "Flt Freq", "Flt Res", "Flt Amount", "Master Level"
+        "Flt Freq", "Flt Res", "Flt Amount", "Flt Key", "Flt Vel",
+        "Flt Atk", "Flt Dcy", "Flt Sus", "Flt Rel",
+        "LFO1 Rate", "LFO1 Depth", "LFO1 Phase", "LFO1 Offset",
+        "LFO2 Rate", "LFO2 Depth", "LFO2 Phase", "LFO2 Offset",
+        "LFO3 Rate", "LFO3 Depth", "LFO3 Phase", "LFO3 Offset",
+        "Amp Atk", "Amp Dcy", "Amp Sus", "Amp Rel",
+        "Master Level"
     };
 }
 
